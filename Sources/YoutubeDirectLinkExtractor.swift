@@ -9,9 +9,12 @@
 import Foundation
 
 public class YoutubeDirectLinkExtractor {
+    //https://www.youtube.com/get_video_info?el=embedded&hl=en&ps=default&video_id=6v2L2UGZJAM
     
-    private let infoBasePrefix = "https://www.youtube.com/get_video_info?video_id="
+    private let infoBasePrefix = "https://www.youtube.com/get_video_info?el=embedded&hl=en&ps=default&video_id="
+    private let infoBasePrefix1 = "https://www.youtube.com/get_video_info?el=detailpage&hl=en&ps=default&video_id="
     private let userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_3) AppleWebKit/604.5.6 (KHTML, like Gecko) Version/11.0.3 Safari/604.5.6"
+    private var apiCallCount = 0
     
     // MARK: - Public
     
@@ -25,16 +28,31 @@ public class YoutubeDirectLinkExtractor {
         extractRawInfo(for: source) { info, error in
             
             if let error = error {
-                failure(error)
-                return
+                if self.apiCallCount == 1 {
+                    self.extractRawInfo(for: source, completion: { info, error in
+                        if let error = error {
+                            failure(error)
+                            return
+                        }
+                        guard info.count > 0 else {
+                            failure(Error.unkown)
+                            return
+                        }
+                        
+                        success(VideoInfo(rawInfo: info))
+                    })
+                }else{
+                    failure(error)
+                    return
+                }
+            }else{
+                guard info.count > 0 else {
+                    failure(Error.unkown)
+                    return
+                }
+                
+                success(VideoInfo(rawInfo: info))
             }
-            
-            guard info.count > 0 else {
-                failure(Error.unkown)
-                return
-            }
-            
-            success(VideoInfo(rawInfo: info))
         }
     }
     
@@ -48,17 +66,23 @@ public class YoutubeDirectLinkExtractor {
             return
         }
         
-        guard let infoUrl = URL(string: "\(infoBasePrefix)\(id)") else {
+        var strUrl = ""
+        if self.apiCallCount == 0{
+            strUrl = infoBasePrefix
+        }else{
+            strUrl = infoBasePrefix1
+        }
+        guard let infoUrl = URL(string: "\(strUrl)\(id)") else {
             completion([], Error.cantConstructRequestUrl)
             return
         }
         
+        self.apiCallCount = self.apiCallCount + 1
         let r = NSMutableURLRequest(url: infoUrl)
         r.httpMethod = "GET"
         r.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         
         URLSession.shared.dataTask(with: r as URLRequest) { data, response, error in
-
             guard let data = data else {
                 completion([], error ?? Error.noDataInResponse)
                 return
@@ -72,16 +96,16 @@ public class YoutubeDirectLinkExtractor {
             let extractionResult = self.extractInfo(from: dataString)
             completion(extractionResult.0, extractionResult.1)
             
-        }.resume()
+            }.resume()
     }
     
     func extractInfo(from string: String) -> ([[String: String]], Swift.Error?) {
         let pairs = string.queryComponents()
         
         guard let fmtStreamMap = pairs["url_encoded_fmt_stream_map"],
-        !fmtStreamMap.isEmpty else {
-            let error = YoutubeError(errorDescription: pairs["reason"])
-            return ([], error ?? Error.cantExtractFmtStreamMap)
+            !fmtStreamMap.isEmpty else {
+                let error = YoutubeError(errorDescription: pairs["reason"])
+                return ([], error ?? Error.cantExtractFmtStreamMap)
         }
         
         let fmtStreamMapComponents = fmtStreamMap.components(separatedBy: ",")
